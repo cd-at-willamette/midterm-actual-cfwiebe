@@ -1,6 +1,6 @@
 ---
 title: "Characterizing Automobiles"
-author: "Your Name Here"
+author: "Charlie Wiebe"
 date: "03/17/2025"
 
 format: 
@@ -26,6 +26,7 @@ sh(library(caret))
 sh(library(fastDummies))
 sh(library(class))
 sh(library(ISLR)) # for the "Auto" dataframe
+sh(library(pROC))
 ```
 
 # Dataframe
@@ -48,10 +49,17 @@ names(Auto)
 - Compute and comment on the RMSE.
 
 ```{r regression}
-# Your code here
+mod <- lm(mpg ~ horsepower + year, Auto)
+summary(mod)
+# RSE is 4.388
+
+predictions <- predict(mod, Auto)
+actuals <- Auto$mpg
+rmse <- sqrt(mean((actuals - predictions)^2))
+cat("RMSE:", rmse)
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">TODO</span>: *The RMSE here is 4.372. On average, the model's predictions deviate from the actual MPG values by 4.372. The mpg values in the dataset are typically between 10 and 40, which leads me to believe that the RMSE value in this case isn't bad, but there's definitely room for improvement.*
 
 # Feature Engineering
 
@@ -61,10 +69,39 @@ names(Auto)
 - Compute and comment on the RMSE.
 
 ```{r features}
-# Your code here
+auto_fe <- Auto %>%
+  mutate(diesel = ifelse(str_detect(name, "diesel"), 1, 0),
+         manufacturer = word(name,1),
+         station_wagon = ifelse(str_detect(name, "wagon|sw"), 1, 0),
+         truck = ifelse(str_detect(name, "pickup|truck"), 1, 0),
+         sedan = ifelse(str_detect(name, "sedan"), 1, 0),
+         luxury = ifelse(str_detect(name, "mercedes|cadillac|bmw|audi|volvo"), 1, 0),
+         american = ifelse(str_detect(name, "ford|chevrolet|dodge|amc|buick|plymouth"), 1, 0),
+         special_edition = ifelse(str_detect(name, "deluxe|custom|limited|brougham|se|gl"), 1, 0),
+         sport = ifelse(str_detect(name, "coupe|gt|sport|corvette|camaro|mustang|firebird"), 1, 0),
+         japanese = ifelse(str_detect(name, "toyota|datsun|honda|mazda|subaru|nissan"), 1, 0))
+
+auto_clean <- auto_fe %>%
+  select(mpg, diesel, station_wagon, truck, sedan, luxury, american, special_edition, sport, japanese) %>%
+  na.omit()
+
+set.seed(505)
+trainIndex <- createDataPartition(auto_clean$mpg, p = 0.8, list = FALSE)
+train_data <- auto_clean[trainIndex, ]
+test_data <- auto_clean[-trainIndex, ]
+
+model <- lm(mpg ~ ., data = train_data)
+summary(model)
+
+predictions <- predict(model, newdata = test_data)
+
+rmse <- sqrt(mean((test_data$mpg - predictions)^2))
+print(paste("RMSE:", round(rmse, 3)))
+
+
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">TODO</span>: *The RMSE for this model is 6.981. On average, the predicted mpg values deviate from their actual values by 6.981. This is worse than the RMSE of the model that used only horsepower and year as features. Because the mpg values in the dataset are typically between 10 and 40, there is considerable room for improvement in this model.*
 
 # Classification
 
@@ -73,10 +110,31 @@ names(Auto)
 - Report on your Kappa value.
 
 ```{r classification}
-# Your code here
+set.seed(505)
+
+auto_class <- Auto %>%
+  mutate(manufacturer = word(name, 1)) %>%
+  filter(manufacturer %in% c("chevrolet", "honda")) %>%
+  select(mpg, horsepower, weight, acceleration, year, manufacturer)
+
+auto_class$manufacturer <- as.factor(auto_class$manufacturer)
+
+split <- createDataPartition(auto_class$manufacturer, p = 0.8, list = FALSE)
+train <- auto_class[split, ]
+test <- auto_class[-split, ]
+
+fit <- train(manufacturer ~ .,
+             data = train, 
+             method = "knn",
+             tuneLength = 15,
+             metric = "Kappa",
+             trControl = trainControl(method = "cv", number = 5))
+confusionMatrix(predict(fit, test),factor(test$manufacturer))$overall['Kappa']
+confusionMatrix(predict(fit, test),factor(test$manufacturer))
+
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">TODO</span>: *I chose to use K-NN instead of Naive Bayes because I didn't want to make the assumptions of Naive Bayes (that the data follows a specific distribution). Naive Bayes also assumes that the features are independent of each other, but this is simply not true with this dataset- many of the features are intertwined with each other. The kappa of this model is 0.615, which indicates that it is doing a decent job of predicting whether a car is a Chevrolet or a Honda, but can be improved. I'm also slightly wary about this value just because the testing set is so small, and thus is more vulnerable to random chance messing with the results.*
 
 # Binary Classification
 
@@ -85,10 +143,43 @@ names(Auto)
 - Display and comment on an ROC curve.
 
 ```{r binary classification}
-# Your code here
+auto_class <- Auto %>%
+  mutate(manufacturer = word(name, 1)) %>%
+  mutate(honda = ifelse(manufacturer == "honda", "Honda", "Nonda")) %>%
+  select(mpg, horsepower, weight, acceleration, year, honda)
+
+auto_class$honda <- as.factor(auto_class$honda)
+
+print(levels(auto_class$honda)) 
+
+set.seed(505)
+trainIndex <- createDataPartition(auto_class$honda, p = 0.7, list = FALSE)
+train_data <- auto_class[trainIndex, ]
+test_data <- auto_class[-trainIndex, ]
+
+table(auto_class$honda)
+# 13 Hondas, 379 Non-Hondas (Nondas)
+# 379 / 13 ~= 29
+weights <- ifelse(train_data$honda == "Honda", 29, 1)
+
+fit <- train(honda ~ .,
+             data = train_data, 
+             method = "knn",
+             tuneLength = 15,
+             weights = weights,
+             trControl = trainControl(method = "cv", number = 5, classProbs = TRUE))
+
+probabilities <- predict(fit, test_data, type = "prob")[, "Honda"]
+
+roc_curve <- roc(test_data$honda, probabilities)
+
+plot(roc_curve, main = "ROC Curve for Honda Classification", col = "blue", lwd = 2)
+
+auc_value <- auc(roc_curve)
+cat("AUC: ", auc_value, "\n")
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">TODO</span>: *I'm quite happy with the area under the curve for this model, which is 0.872. This suggests that the model can effectively distinguish between Hondas and other vehicles. This conclusion is supported by the ROC curve itself. The blue line hugs the top left corner, which indicates a strong model, whereas a model with an ROC curve that is close to the diagonal line would suggest random guessing and a weak model.*
 
 # Ethics
 
@@ -102,17 +193,17 @@ names(Auto)
 > <span style="color:red;font-weight:bold">TODO</span>: Big Data and Human-Centered Computing
 
 ```{r big data}
-# Your code here
+# The Clean Air Act of 1970 and its 1977 Amendments established a framework between federal and state governments that ensures air quality standards are met through shared responsibility. Similarly, data scientists must work collaboratively to ensure integrity, transparency, and accountability in their analyses, as well as lack of bias and discrimination in their data. To give an example that is specific to the Auto dataset we've been looking at, Kappa can be used to measure agreement between human inspectors and automated systems when classifying vehicles based on emissions compliance or fuel efficiency standards. Moreover, a Kappa value of 0.8 or higher would indicate strong reliability, ensuring that regulatory actions, such as identifying high-emission vehicles or enforcing fuel efficiency standards, are based on accurate and consistent data.
 ```
 
 > <span style="color:red;font-weight:bold">TODO</span>: Democratic Institutions
 
 ```{r democracy}
-# Your code here
+# Data scientists play a critical role in supporting democratic institutions by ensuring the integrity and transparency of data used in policymaking and regulation. Additionally, as we move forward toward a more AI-dependent future, we must work hard to ensure that the people controlling language-learning models and their algorithms do not have political interests or personal biases in mind. This must be done with a robust and transparent system of checks and balances. For instance, when evaluating the fairness and accuracy of AI models used in public decision-making, data scientists can employ the ROC curve to assess how well the model distinguishes between different outcomes. A high AUC would indicate strong discriminatory power, ensuring that the model is both accurate and fair. This statistical measure helps ensure that AI systems are not only effective but also unbiased, fostering trust in democratic processes and aligning with the principles of transparency and accountability championed by the Clean Air Act of 1970 and its 1977 Amendments.
 ```
 
 > <span style="color:red;font-weight:bold">TODO</span>: Climate Change
 
 ```{r climate}
-# Your code here
+# The Clean Air Act of 1970 and its 1977 Amendments were instrumental in reducing air pollution and addressing environmental challenges. Today, data scientists have a critical role in combating climate change by developing models to predict emissions, monitor environmental impacts, and inform mitigation strategies. For an example that is specific to the Auto dataset, RMSE can be used to evaluate the accuracy of a model predicting vehicle fuel efficiency (mpg). A lower RMSE would indicate better predictive performance, helping policymakers design effective regulations to reduce greenhouse gas emissions.
 ```
